@@ -6,6 +6,7 @@ from email.utils import parsedate_tz
 from io import BytesIO
 from itertools import chain
 from mimetypes import guess_type
+from typing import Callable
 from typing import Iterable
 from typing import List
 from typing import Optional
@@ -20,6 +21,7 @@ from requests import get as http_get
 
 from opwen_email_server.config import MAX_HEIGHT_IMAGES
 from opwen_email_server.config import MAX_WIDTH_IMAGES
+from opwen_email_server.utils.log import LogMixin
 from opwen_email_server.utils.serialization import to_base64
 
 
@@ -50,7 +52,7 @@ def _parse_attachments(mailparts: Iterable[MailPart]) -> Iterable[dict]:
 
 
 def _parse_addresses(message: PyzMessage, address_type: str) -> List[str]:
-    return [email for _, email in message.get_addresses(address_type) if email]
+    return sorted(email for _, email in message.get_addresses(address_type) if email)
 
 
 def _parse_address(message: PyzMessage, address_type: str) -> Optional[str]:
@@ -123,19 +125,21 @@ def _format_attachment(filename: str, content: bytes) -> bytes:
     return content
 
 
-def _get_recipients(email: dict) -> Iterable[str]:
-    return chain(email.get('to') or [],
-                 email.get('cc') or [],
-                 email.get('bcc') or [])
+def get_recipients(email: dict) -> Iterable[str]:
+    return chain(email.get('to') or [], email.get('cc') or [], email.get('bcc') or [])
 
 
 def get_domains(email: dict) -> Iterable[str]:
-    return frozenset(get_domain(address)
-                     for address in _get_recipients(email))
+    return frozenset(get_domain(address) for address in get_recipients(email))
 
 
 def get_domain(address: str) -> str:
     return address.split('@')[-1]
+
+
+def ensure_has_sent_at(email: dict):
+    if not email.get('sent_at'):
+        email['sent_at'] = datetime.utcnow().strftime('%Y-%m-%d %H:%M')
 
 
 def _get_image_type(response: Response, url: str) -> Optional[str]:
@@ -181,7 +185,7 @@ def _fetch_image_to_base64(image_url: str) -> Optional[str]:
 
     small_image_bytes = _change_image_size(response.content)
     small_image_base64 = to_base64(small_image_bytes)
-    return 'data:{};base64,{}'.format(image_type, small_image_base64)
+    return f'data:{image_type};base64,{small_image_base64}'
 
 
 def _is_valid_url(url: Optional[str]) -> bool:
@@ -192,7 +196,7 @@ def _is_valid_url(url: Optional[str]) -> bool:
     return has_http_prefix or has_https_prefix
 
 
-def format_inline_images(email: dict) -> dict:
+def format_inline_images(email: dict, on_error: Callable) -> dict:
     email_body = email.get('body', '')
     if not email_body:
         return email
@@ -208,10 +212,22 @@ def format_inline_images(email: dict) -> dict:
         if not _is_valid_url(image_url):
             continue
 
-        encoded_image = _fetch_image_to_base64(image_url)
-        if encoded_image:
-            image_tag['src'] = encoded_image
+        try:
+            encoded_image = _fetch_image_to_base64(image_url)
+        except Exception as ex:
+            on_error('Unable to inline image %s: %s', image_url, ex)
+        else:
+            if encoded_image:
+                image_tag['src'] = encoded_image
 
     new_email = dict(email)
     new_email['body'] = str(soup)
     return new_email
+
+
+class MimeEmailParser(LogMixin):
+    def __call__(self, mime_email: str) -> dict:
+        email = parse_mime_email(mime_email)
+        email = format_attachments(email)
+        email = format_inline_images(email, self.log_warning)
+        return email

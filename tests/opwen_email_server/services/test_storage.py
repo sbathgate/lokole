@@ -10,7 +10,11 @@ from tarfile import TarInfo
 from tempfile import NamedTemporaryFile
 from tempfile import mkdtemp
 from unittest import TestCase
+from unittest.mock import PropertyMock
+from unittest.mock import patch
 
+from libcloud.storage.types import ContainerAlreadyExistsError
+from libcloud.storage.types import ContainerDoesNotExistError
 from libcloud.storage.types import ObjectDoesNotExistError
 from xtarfile import open as tarfile_open
 
@@ -22,6 +26,7 @@ from opwen_email_server.utils.serialization import from_jsonl_bytes
 from opwen_email_server.utils.serialization import to_jsonl_bytes
 from opwen_email_server.utils.temporary import create_tempfilename
 from opwen_email_server.utils.temporary import removing
+from tests.opwen_email_server.helpers import throw
 
 
 class AzureTextStorageTests(TestCase):
@@ -40,24 +45,54 @@ class AzureTextStorageTests(TestCase):
     def test_list(self):
         self._storage.store_text('resource1', 'a')
         self._storage.store_text('resource2.txt.gz', 'b')
-        self.assertEqual(sorted(self._storage.iter()),
-                         sorted(['resource1', 'resource2']))
+        self._storage.store_text('pa.th/to/re.sou.rce.txt.gz', 'b')
+        self.assertEqual(sorted(self._storage.iter()), sorted(['resource1', 'resource2', 'pa.th/to/re.sou.rce']))
 
         self._storage.delete('resource2')
-        self.assertEqual(sorted(self._storage.iter()),
-                         sorted(['resource1']))
+        self._storage.delete('pa.th/to/re.sou.rce')
+        self.assertEqual(sorted(self._storage.iter()), sorted(['resource1']))
+
+    def test_list_with_prefix(self):
+        self._storage.store_text('one/a', 'a')
+        self._storage.store_text('one/b.txt.gz', 'b')
+        self._storage.store_text('two/c.txt.gz', 'c')
+        self._storage.store_text('two/d', 'd')
+        self._storage.store_text('two/e', 'e')
+        self._storage.store_text('f', 'f')
+        self.assertEqual(sorted(self._storage.iter('one/')), sorted(['a', 'b']))
+        self.assertEqual(sorted(self._storage.iter('two/')), sorted(['c', 'd', 'e']))
 
     def test_ensure_exists(self):
         self.assertFalse(isdir(join(self._folder, self._container)))
         self._storage.ensure_exists()
         self.assertTrue(isdir(join(self._folder, self._container)))
 
+    def test_handles_race_condition_when_creating_container(self):
+        with patch.object(self._storage, '_driver', new_callable=PropertyMock) as driver:
+            container = {'get_was_called': False}
+
+            # noinspection PyUnusedLocal
+            def get_container(*args, **kwargs):
+                if not container['get_was_called']:
+                    container['get_was_called'] = True
+                    raise ContainerDoesNotExistError(None, driver, self._container)
+
+                return container
+
+            driver.get_container.side_effect = get_container
+            driver.create_container.side_effect = throw(ContainerAlreadyExistsError(None, driver, self._container))
+
+            self.assertIs(self._storage._client, container)
+
     def setUp(self):
         self._folder = mkdtemp()
         self._container = 'container'
         self._storage = AzureTextStorage(
-            account=self._folder, key='key',
-            container=self._container, provider='LOCAL')
+            account=self._folder,
+            key='key',
+            container=self._container,
+            provider='LOCAL',
+        )
 
     def tearDown(self):
         rmtree(self._folder)
@@ -76,6 +111,8 @@ class AzureFileStorageTests(TestCase):
         with self.assertRaises(ObjectDoesNotExistError):
             self._storage.fetch_file(resource_id)
 
+        self._storage.delete(resource_id)
+
     def assertFileContains(self, path: str, content: str):
         with open(path, encoding='utf-8') as fobj:
             self.assertEqual(fobj.read(), content)
@@ -91,8 +128,11 @@ class AzureFileStorageTests(TestCase):
         self._folder = mkdtemp()
         self._container = 'container'
         self._storage = AzureFileStorage(
-            account=self._folder, key='key',
-            container=self._container, provider='LOCAL')
+            account=self._folder,
+            key='key',
+            container=self._container,
+            provider='LOCAL',
+        )
         self._extra_files = set()
 
     def tearDown(self):
@@ -108,15 +148,13 @@ class AzureObjectsStorageTests(TestCase):
         lines = b'{"foo":"bar"}\n{"baz":[1,2,3]}'
         self._given_resource(resource_id, name, lines)
 
-        objs = list(self._storage.fetch_objects(
-            resource_id, (name, from_jsonl_bytes)))
+        objs = list(self._storage.fetch_objects(resource_id, (name, from_jsonl_bytes)))
 
         self.assertEqual(objs, [{'foo': 'bar'}, {'baz': [1, 2, 3]}])
 
     def test_fetches_missing_file(self):
         with self.assertRaises(ObjectDoesNotExistError):
-            list(self._storage.fetch_objects(
-                'missing', ('file', from_jsonl_bytes)))
+            list(self._storage.fetch_objects('missing', ('file', from_jsonl_bytes)))
 
     def test_fetches_missing_archive_member(self):
         resource_id = '3d2bfa80-18f7-11e7-93ae-92361f002671.tar.gz'
@@ -125,8 +163,7 @@ class AzureObjectsStorageTests(TestCase):
         self._given_resource(resource_id, name, lines)
 
         with self.assertRaises(ObjectDoesNotExistError):
-            list(self._storage.fetch_objects(
-                resource_id, ('missing-tar', from_jsonl_bytes)))
+            list(self._storage.fetch_objects(resource_id, ('missing-tar', from_jsonl_bytes)))
 
     def test_fetches_json_objects(self):
         resource_id = '3d2bfa80-18f7-11e7-93ae-92361f002671.tar.gz'
@@ -134,8 +171,7 @@ class AzureObjectsStorageTests(TestCase):
         lines = b'{"emails":[\n{"foo":"bar"},\n{"baz":[1,2,3]}\n]}'
         self._given_resource(resource_id, name, lines)
 
-        objs = list(self._storage.fetch_objects(
-            resource_id, (name, from_jsonl_bytes)))
+        objs = list(self._storage.fetch_objects(resource_id, (name, from_jsonl_bytes)))
 
         self.assertEqual(objs, [{'foo': 'bar'}, {'baz': [1, 2, 3]}])
 
@@ -145,8 +181,7 @@ class AzureObjectsStorageTests(TestCase):
         lines = b'{"foo":"bar"}\n{"corrupted":1,]}\n{"baz":[1,2,3]}'
         self._given_resource(resource_id, name, lines)
 
-        objs = list(self._storage.fetch_objects(
-            resource_id, (name, from_jsonl_bytes)))
+        objs = list(self._storage.fetch_objects(resource_id, (name, from_jsonl_bytes)))
 
         self.assertEqual(objs, [{'foo': 'bar'}, {'baz': [1, 2, 3]}])
 
@@ -154,8 +189,7 @@ class AzureObjectsStorageTests(TestCase):
         name = 'file'
         objs = [{'foo': 'bar'}, {'baz': [1, 2, 3]}]
 
-        resource_id = self._storage.store_objects(
-            (name, objs, to_jsonl_bytes))
+        resource_id = self._storage.store_objects((name, objs, to_jsonl_bytes))
 
         self.assertIsNotNone(resource_id)
         self.assertContainerHasNumFiles(1, suffix='.tar.zstd')
@@ -164,8 +198,7 @@ class AzureObjectsStorageTests(TestCase):
         name = 'file'
         objs = [{'foo': 'bar'}, {'baz': [1, 2, 3]}]
 
-        resource_id = self._storage.store_objects(
-            (name, objs, to_jsonl_bytes), 'gz')
+        resource_id = self._storage.store_objects((name, objs, to_jsonl_bytes), 'gz')
 
         self.assertIsNotNone(resource_id)
         self.assertContainerHasNumFiles(1, suffix='.tar.gz')
@@ -174,27 +207,34 @@ class AzureObjectsStorageTests(TestCase):
         name = 'file'
         objs = []
 
-        resource_id = self._storage.store_objects(
-            (name, objs, to_jsonl_bytes), 'gz')
+        resource_id = self._storage.store_objects((name, objs, to_jsonl_bytes), 'gz')
 
         self.assertIsNone(resource_id)
         self.assertContainerHasNumFiles(0)
 
+    def test_deletes_objects(self):
+        name = 'file'
+        objs = [{'foo': 'bar'}, {'baz': [1, 2, 3]}]
+
+        resource_id = self._storage.store_objects((name, objs, to_jsonl_bytes))
+        self._storage.delete(resource_id)
+
+        self.assertContainerHasNumFiles(0)
+
     def assertContainerHasNumFiles(self, count: int, suffix: str = ''):
         container_files = listdir(join(self._folder, self._container))
-        matches = [entry for entry in container_files
-                   if entry.endswith(suffix)]
+        matches = [entry for entry in container_files if entry.endswith(suffix)]
 
         self.assertEqual(
             len(matches),
             count,
-            'Container does not have {} files ending with "{}"; '
-            'all files in container are: {}'
-            .format(count, suffix, ', '.join(container_files)))
+            f'Container does not have {count} files ending with "{suffix}"; '
+            f'all files in container are: {", ".join(container_files)}',
+        )
 
     def _given_resource(self, resource_id: str, name: str, lines: bytes):
         client = self._storage._file_storage._client
-        mode = 'w:{}'.format(Path(resource_id).suffix[1:])
+        mode = f'w:{Path(resource_id).suffix[1:]}'
         with removing(create_tempfilename(resource_id)) as buffer_path:
             with tarfile_open(buffer_path, mode) as archive:
                 tarinfo = TarInfo(name)
@@ -206,12 +246,12 @@ class AzureObjectsStorageTests(TestCase):
         self._folder = mkdtemp()
         self._container = 'container'
         mkdir(join(self._folder, self._container))
-        self._storage = AzureObjectsStorage(
-            file_storage=AzureFileStorage(
-                account=self._folder,
-                key='unused',
-                container=self._container,
-                provider='LOCAL'))
+        self._storage = AzureObjectsStorage(file_storage=AzureFileStorage(
+            account=self._folder,
+            key='unused',
+            container=self._container,
+            provider='LOCAL',
+        ))
 
     def tearDown(self):
         rmtree(self._folder)
@@ -235,7 +275,8 @@ class AzureObjectStorageTests(TestCase):
             account=self._folder,
             key='unused',
             container=self._container,
-            provider='LOCAL')
+            provider='LOCAL',
+        )
 
     def tearDown(self):
         rmtree(self._folder)

@@ -2,14 +2,15 @@ version: '3.4'
 
 x-shared-app-environment:
   &shared-app-environment
-  LOKOLE_QUEUE_BROKER_URL: pyamqp://guest:guest@rabbitmq
+  LOKOLE_QUEUE_BROKER_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq
   LOKOLE_QUEUE_BROKER_SCHEME: ${LOKOLE_QUEUE_BROKER_SCHEME}
   LOKOLE_EMAIL_SERVER_QUEUES_SAS_NAME: ${LOKOLE_EMAIL_SERVER_QUEUES_SAS_NAME}
   LOKOLE_EMAIL_SERVER_QUEUES_SAS_KEY: ${LOKOLE_EMAIL_SERVER_QUEUES_SAS_KEY}
   LOKOLE_EMAIL_SERVER_QUEUES_NAMESPACE: ${LOKOLE_EMAIL_SERVER_QUEUES_NAMESPACE}
   LOKOLE_LOG_LEVEL: ${LOKOLE_LOG_LEVEL}
   LOKOLE_EMAIL_SERVER_APPINSIGHTS_KEY: ${APPINSIGHTS_INSTRUMENTATIONKEY}
-  LOKOLE_EMAIL_SERVER_APPINSIGHTS_HOST: http://appinsights
+  LOKOLE_EMAIL_SERVER_APPINSIGHTS_HOST: http://appinsights:8000
+  LOKOLE_RESOURCE_SUFFIX: ${LOKOLE_RESOURCE_SUFFIX}
 
   LOKOLE_STORAGE_PROVIDER: AZURE_BLOBS
 
@@ -34,6 +35,9 @@ x-shared-app-build:
   build:
     context: .
     dockerfile: docker/app/Dockerfile
+    target: ${BUILD_TARGET}
+    args:
+      LOKOLE_SENDGRID_KEY: ${LOKOLE_SENDGRID_KEY}
 
 services:
 
@@ -45,35 +49,68 @@ services:
     ports:
       - ${APP_PORT}:8888
     environment:
+      NGINX_WORKERS: ${NGINX_WORKERS}
       DNS_RESOLVER: 127.0.0.11
-      HOSTNAME_FLOWER: flower:8080
+      HOSTNAME_WEBAPP: webapp:8080
+      HOSTNAME_CLIENT_METRICS: api:8080
       HOSTNAME_CLIENT_READ: api:8080
       HOSTNAME_CLIENT_WRITE: api:8080
       HOSTNAME_EMAIL_RECEIVE: api:8080
       HOSTNAME_CLIENT_REGISTER: api:8080
     depends_on:
       - api
-      - flower
+      - webapp
+
+  statuspage:
+    image: ${DOCKER_REPO}/opwenstatuspage:${BUILD_TAG}
+    build:
+      context: .
+      dockerfile: docker/statuspage/Dockerfile
+      target: ${BUILD_TARGET}
+    ports:
+      - ${STATUSPAGE_PORT}:3000
+    environment:
+      PORT: 3000
+    depends_on:
+      - nginx
+
+  webapp:
+    image: ${DOCKER_REPO}/opwenwebapp:${BUILD_TAG}
+    build:
+      context: .
+      dockerfile: docker/client/Dockerfile
+      target: ${BUILD_TARGET}
+      args:
+        VERSION: ${BUILD_TAG}
+    environment:
+      <<: *shared-app-environment
+      OPWEN_EMAIL_SERVER_HOSTNAME: nginx:8888
+      WEBAPP_WORKERS: ${WEBAPP_WORKERS}
+      WEBAPP_PORT: "8080"
+      HOST: "0.0.0.0"
+    depends_on:
+      - azurite
 
   api:
-    << : *shared-app-build
-    command: ["/app/run-gunicorn.sh"]
+    <<: *shared-app-build
+    command: ["/app/docker/app/run-gunicorn.sh"]
     environment:
-      << : *shared-app-environment
+      <<: *shared-app-environment
+      PORT: "8080"
       CONNEXION_SPEC: dir:/app/opwen_email_server/swagger
       SERVER_WORKERS: ${SERVER_WORKERS}
       TESTING_UI: "True"
-      REGISTRATION_USERNAME: admin
-      REGISTRATION_PASSWORD: password
+      LOKOLE_REGISTRATION_USERNAME: admin
+      LOKOLE_REGISTRATION_PASSWORD: password
     depends_on:
       - appinsights
       - azurite
 
   worker:
-    << : *shared-app-build
-    command: ["/app/run-celery.sh"]
+    <<: *shared-app-build
+    command: ["/app/docker/app/run-celery.sh"]
     environment:
-      << : *shared-app-environment
+      <<: *shared-app-environment
       CELERY_QUEUE_NAMES: all
       QUEUE_WORKERS: ${QUEUE_WORKERS}
     depends_on:
@@ -81,46 +118,27 @@ services:
       - azurite
       - rabbitmq
 
-  flower:
-    << : *shared-app-build
-    command: ["/app/run-flower.sh"]
-    environment:
-      << : *shared-app-environment
-      FLOWER_USERNAME: flower
-      FLOWER_PASSWORD: 123456
-
-  setup:
-    image: ${DOCKER_REPO}/opwenserver_setup:${BUILD_TAG}
-    build:
-      context: .
-      dockerfile: docker/setup/Dockerfile
-    command: /app/setup.sh --help
-
   rabbitmq:
-    image: rabbitmq:3.7.8-management
+    image: rabbitmq:management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - ${RABBITMQ_PORT}:15672
 
   appinsights:
-    image: cwolff/appinsights-on-premises:0.0.14-postgres
+    image: cwolff/appinsights-on-premises:0.2.0-libcloud
     depends_on:
-      - postgres
+      - azurite
     environment:
-      DATABASE_URL: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}"
+      PORT: "8000"
+      DATABASE_URL: "libcloud://${AZURITE_ACCOUNT}:${AZURITE_KEY}@azure_blobs?endpoint=${AZURITE_HOST}&ssl=${AZURITE_SECURE}"
       APPINSIGHTS_INSTRUMENTATIONKEY: "${APPINSIGHTS_INSTRUMENTATIONKEY}"
-    ports:
-      - ${APPINSIGHTS_PORT}:80
-
-  postgres:
-    image: postgres:11-alpine
-    environment:
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
-      POSTGRES_USER: "${POSTGRES_USER}"
-      POSTGRES_DB: "${POSTGRES_DB}"
-    ports:
-      - ${POSTGRES_PORT}:5432
 
   azurite:
-    image: arafato/azurite:2.6.5
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    command: ["azurite-blob", "--blobHost=0.0.0.0"]
     environment:
-      executable: blob
+      AZURITE_ACCOUNTS: "${AZURITE_ACCOUNT}:${AZURITE_KEY};"
     ports:
       - ${AZURITE_PORT}:10000

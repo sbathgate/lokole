@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: {{ .Release.Name }}-nginx
+  name: {{ .Release.Name }}-nginx
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-nginx
+  replicas: 3
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: {{ .Release.Name }}-nginx
+    spec:
+      containers:
+      - name: nginx
+        image: {{.Values.version.imageRegistry}}/opwenserver_nginx:{{.Values.version.dockerTag}}
+        env:
+        - name: PORT
+          value: "8888"
+        - name: DNS_RESOLVER
+          value: 127.0.0.1:53 ipv6=off
+        - name: HOSTNAME_WEBAPP
+          value: "{{ .Release.Name }}-webapp:8080"
+        - name: HOSTNAME_CLIENT_METRICS
+          value: "{{ .Release.Name }}-api:8080"
+        - name: HOSTNAME_CLIENT_READ
+          value: "{{ .Release.Name }}-api:8080"
+        - name: HOSTNAME_CLIENT_WRITE
+          value: "{{ .Release.Name }}-api:8080"
+        - name: HOSTNAME_EMAIL_RECEIVE
+          value: "{{ .Release.Name }}-api:8080"
+        - name: HOSTNAME_CLIENT_REGISTER
+          value: "{{ .Release.Name }}-api:8080"
+        ports:
+        - containerPort: 8888
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+      - name: dnsmasq
+        image: "janeczku/go-dnsmasq:release-1.0.7"
+        args:
+          - --listen=127.0.0.1:53
+          - --default-resolver
+          - --append-search-domains
+          - --hostsfile=/etc/hosts
+          - --verbose
+      restartPolicy: Always
+status: {}

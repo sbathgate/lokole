@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: {{ .Release.Name }}-worker
+  name: {{ .Release.Name }}-worker
+spec:
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}-worker
+  replicas: 1
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: {{ .Release.Name }}-worker
+    spec:
+      containers:
+      - name: worker
+        image: {{.Values.version.imageRegistry}}/opwenserver_app:{{.Values.version.dockerTag}}
+        command: ["/app/docker/app/run-celery.sh"]
+        env:
+        - name: CELERY_QUEUE_NAMES
+          value: all
+        - name: QUEUE_WORKERS
+          value: "{{.Values.worker.queueWorkers}}"
+        {{ include "opwen.environment.shared" . }}
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+      restartPolicy: Always
+status: {}

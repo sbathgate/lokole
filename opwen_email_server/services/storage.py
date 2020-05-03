@@ -8,12 +8,12 @@ from typing import Iterable
 from typing import Iterator
 from typing import Optional
 from typing import Tuple
-from uuid import uuid4
 
 from cached_property import cached_property
 from libcloud.storage.base import Container
 from libcloud.storage.base import StorageDriver
 from libcloud.storage.providers import get_driver
+from libcloud.storage.types import ContainerAlreadyExistsError
 from libcloud.storage.types import ContainerDoesNotExistError
 from libcloud.storage.types import ObjectDoesNotExistError
 from libcloud.storage.types import Provider
@@ -21,13 +21,13 @@ from xtarfile import open as tarfile_open
 from xtarfile.xtarfile import SUPPORTED_FORMATS
 
 from opwen_email_server.utils.log import LogMixin
-from opwen_email_server.utils.path import get_extension
 from opwen_email_server.utils.serialization import from_msgpack_bytes
 from opwen_email_server.utils.serialization import gunzip_bytes
 from opwen_email_server.utils.serialization import gzip_bytes
 from opwen_email_server.utils.serialization import to_msgpack_bytes
 from opwen_email_server.utils.temporary import create_tempfilename
 from opwen_email_server.utils.temporary import removing
+from opwen_email_server.utils.unique import new_resource_id
 
 AccessInfo = namedtuple('AccessInfo', ['account', 'key', 'container'])
 
@@ -36,8 +36,13 @@ Download = Tuple[str, Callable[[bytes], dict]]
 
 
 class _BaseAzureStorage(LogMixin):
-    def __init__(self, account: str, key: str, container: str, provider: str,
-                 host: Optional[str] = None, secure: bool = True) -> None:
+    def __init__(self,
+                 account: str,
+                 key: str,
+                 container: str,
+                 provider: str,
+                 host: Optional[str] = None,
+                 secure: bool = True) -> None:
         self._account = account
         self._key = key
         self._container = container
@@ -48,36 +53,55 @@ class _BaseAzureStorage(LogMixin):
     @cached_property
     def _driver(self) -> StorageDriver:
         driver = get_driver(self._provider)
-        return driver(self._account, self._key,
-                      host=self._host, secure=self._secure)
+        return driver(self._account, self._key, host=self._host, secure=self._secure)
 
     @cached_property
     def _client(self) -> Container:
         try:
             container = self._driver.get_container(self._container)
         except ContainerDoesNotExistError:
-            container = self._driver.create_container(self._container)
+            try:
+                container = self._driver.create_container(self._container)
+            except ContainerAlreadyExistsError:
+                container = self._driver.get_container(self._container)
         return container
+
+    @property
+    def _generated_suffix(self) -> str:
+        return ''
 
     def access_info(self) -> AccessInfo:
         return AccessInfo(
             account=self._account,
             key=self._key,
-            container=self._container)
+            container=self._container,
+        )
 
     def ensure_exists(self):
         # noinspection PyStatementEffect
         self._client
 
     def delete(self, resource_id: str):
-        resource = self._client.get_object(resource_id)
-        resource.delete()
-        self.log_debug('deleted %s', resource_id)
+        try:
+            resource = self._client.get_object(resource_id)
+        except ObjectDoesNotExistError:
+            self.log_warning('deleted missing %s', resource_id)
+        else:
+            resource.delete()
+            self.log_debug('deleted %s', resource_id)
 
-    def iter(self) -> Iterator[str]:
-        for resource in self._client.list_objects():
-            extension = get_extension(resource.name)
-            resource_id = resource.name.replace(extension, '')
+    def iter(self, prefix: Optional[str] = None) -> Iterator[str]:
+        resources = self._driver.iterate_container_objects(self._client, prefix=prefix)
+
+        for resource in resources:
+            resource_id = resource.name
+
+            if prefix is not None:
+                resource_id = resource_id[len(prefix):]
+
+            if resource_id.endswith(self._generated_suffix):
+                resource_id = resource_id[:-len(self._generated_suffix)]
+
             yield resource_id
             self.log_debug('listed %s', resource_id)
 
@@ -122,10 +146,13 @@ class _AzureBytesStorage(_BaseAzureStorage):
         super().delete(filename)
 
     def _to_filename(self, resource_id: str) -> str:
-        extension = '.{}.{}'.format(self._extension, self._compression)
-        if resource_id.endswith(extension):
+        if resource_id.endswith(self._generated_suffix):
             return resource_id
-        return '{}{}'.format(resource_id, extension)
+        return f'{resource_id}{self._generated_suffix}'
+
+    @property
+    def _generated_suffix(self) -> str:
+        return f'.{self._extension}.{self._compression}'
 
     @property
     def _extension(self) -> str:
@@ -149,11 +176,9 @@ class AzureObjectsStorage(LogMixin):
     _compression = 'zstd'
     _compression_level = 20
 
-    def __init__(self, file_storage: AzureFileStorage,
-                 resource_id_source: Callable[[], str] = None):
-
+    def __init__(self, file_storage: AzureFileStorage, resource_id_source: Callable[[], str] = None):
         self._file_storage = file_storage
-        self._resource_id_source = resource_id_source or self._new_resource_id
+        self._resource_id_source = resource_id_source or new_resource_id
 
     def _open_archive_file(self, archive: TarFile, name: str) -> IO[bytes]:
         while True:
@@ -167,10 +192,7 @@ class AzureObjectsStorage(LogMixin):
                 return fobj
 
         # noinspection PyProtectedMember
-        raise ObjectDoesNotExistError(
-            'File {} is missing in archive'.format(name),
-            self._file_storage._driver,
-            archive.name)
+        raise ObjectDoesNotExistError(f'File {name} is missing in archive', self._file_storage._driver, archive.name)
 
     @classmethod
     def _open_archive(cls, path: str, mode: str) -> TarFile:
@@ -184,7 +206,7 @@ class AzureObjectsStorage(LogMixin):
         if compression == 'zstd' and mode == 'w':
             kwargs['level'] = cls._compression_level
 
-        mode = '{}|{}'.format(mode, compression)
+        mode = f'{mode}|{compression}'
         return tarfile_open(path, mode, **kwargs)
 
     def access_info(self) -> AccessInfo:
@@ -197,12 +219,11 @@ class AzureObjectsStorage(LogMixin):
     def compression_formats(cls) -> Iterable[str]:
         return SUPPORTED_FORMATS
 
-    def store_objects(self, upload: Upload,
-                      compression: Optional[str] = None) -> Optional[str]:
+    def store_objects(self, upload: Upload, compression: Optional[str] = None) -> Optional[str]:
 
-        resource_id = '{resource_id}.tar.{compression}'.format(
-            resource_id=self._resource_id_source(),
-            compression=compression or self._compression)
+        compression = compression or self._compression
+
+        resource_id = f'{self._resource_id_source()}.tar.{compression}'
 
         name, objs, encoder = upload
 
@@ -227,8 +248,7 @@ class AzureObjectsStorage(LogMixin):
         self.log_debug('stored %d objects at %s', num_stored, resource_id)
         return resource_id if num_stored > 0 else None
 
-    def fetch_objects(self, resource_id: str,
-                      download: Download) -> Iterable[dict]:
+    def fetch_objects(self, resource_id: str, download: Download) -> Iterable[dict]:
 
         name, decoder = download
 
@@ -246,10 +266,6 @@ class AzureObjectsStorage(LogMixin):
 
     def delete(self, resource_id: str):
         self._file_storage.delete(resource_id)
-
-    @classmethod
-    def _new_resource_id(cls) -> str:
-        return str(uuid4())
 
 
 class AzureObjectStorage(_AzureBytesStorage):

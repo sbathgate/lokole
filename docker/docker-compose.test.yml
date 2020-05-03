@@ -1,0 +1,17 @@
+version: '3.4'
+
+services:
+
+  integtest:
+    image: ${DOCKER_REPO}/opwenserver_integtest:${BUILD_TAG}
+    build:
+      context: .
+      dockerfile: docker/integtest/Dockerfile
+    environment:
+      REGISTRATION_CREDENTIALS: ${REGISTRATION_CREDENTIALS}
+      APPINSIGHTS_INSTRUMENTATIONKEY: ${APPINSIGHTS_INSTRUMENTATIONKEY}
+      AZURITE_ACCOUNT: ${AZURITE_ACCOUNT}
+      AZURITE_KEY: ${AZURITE_KEY}
+      AZURITE_HOST: ${AZURITE_HOST}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

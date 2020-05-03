@@ -13,8 +13,7 @@ class JsonTests(TestCase):
     def test_roundtrip(self):
         obj = {'a': 1, 'b': [2]}
 
-        self.assertEqual(obj, serialization.from_json(
-            serialization.to_json(obj)))
+        self.assertEqual(obj, serialization.from_json(serialization.to_json(obj)))
 
 
 class Base64Tests(TestCase):
@@ -44,10 +43,7 @@ class JsonlTests(TestCase):
         self.assertEqual(original, deserialized)
 
     def test_parses_jsonl_lines(self):
-        lines = [
-            b'{"a":1}\n',
-            b'{"b":2}\n'
-        ]
+        lines = [b'{"a":1}\n', b'{"b":2}\n']
 
         deserialized = [serialization.from_jsonl_bytes(line) for line in lines]
 
@@ -65,13 +61,17 @@ class JsonlTests(TestCase):
 
         self.assertEqual([None, {"a": 1}, {"b": 2}, None], deserialized)
 
+    def test_handles_non_utf8(self):
+        deserialized = serialization.from_jsonl_bytes(b'\xff\xfef\x00o\x00o\x00')
+
+        self.assertIsNone(deserialized)
+
 
 class GzipTests(TestCase):
     sample_string = b'hello world\n'
 
-    sample_compressed = (
-        b'\x1f\x8b\x08\x08;\n\xfdX\x00\x03foo.txt\x00\xcbH\xcd\xc9\xc9W('
-        b'\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00')
+    sample_compressed = (b'\x1f\x8b\x08\x08;\n\xfdX\x00\x03foo.txt\x00\xcbH\xcd\xc9\xc9W('
+                         b'\xcf/\xcaI\xe1\x02\x00-;\x08\xaf\x0c\x00\x00\x00')
 
     def test_roundtrip(self):
         compressed = serialization.gzip_bytes(self.sample_string)

@@ -1,0 +1,23 @@
+apiVersion: "v1"
+
+kind: Values
+
+domain: mailserver.lokole.ca
+
+version:
+  imageRegistry: ascoderu
+  dockerTag: latest
+
+server:
+  serverWorkers: 2
+  webappWorkers: 2
+
+worker:
+  queueWorkers: 1
+
+logging:
+  level: INFO
+
+letsencrypt:
+  email: ascoderu.opwen@gmail.com
+  url: https://acme-v02.api.letsencrypt.org/directory

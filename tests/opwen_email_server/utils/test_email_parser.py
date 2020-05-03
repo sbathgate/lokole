@@ -4,15 +4,15 @@ from os.path import abspath
 from os.path import dirname
 from os.path import join
 from unittest import TestCase
+from unittest.mock import patch
 
-from responses import mock
+from responses import mock as mock_responses
 
 from opwen_email_server.utils import email_parser
+from tests.opwen_email_server.helpers import throw
 
-
-TEST_DATA_DIRECTORY = abspath(join(
-    dirname(__file__), '..', '..',
-    'files', 'opwen_email_server', 'utils', 'test_email_parser'))
+TEST_DATA_DIRECTORY = abspath(
+    join(dirname(__file__), '..', '..', 'files', 'opwen_email_server', 'utils', 'test_email_parser'))
 
 
 @unique
@@ -22,7 +22,7 @@ class ImageSize(Enum):
 
 
 def _given_test_image(size: ImageSize) -> bytes:
-    image_path = join(TEST_DATA_DIRECTORY, '{}.png'.format(size.name))
+    image_path = join(TEST_DATA_DIRECTORY, f'{size.name}.png')
     with open(image_path, 'rb') as fobj:
         return fobj.read()
 
@@ -31,47 +31,43 @@ class ParseMimeEmailTests(TestCase):
     def test_parses_email_metadata(self):
         mime_email = self._given_mime_email('email-html.mime')
 
-        email = email_parser.parse_mime_email(mime_email)
+        email = self._parse(mime_email)
 
         self.assertEqual(email.get('from'), 'clemens.wolff@gmail.com')
         self.assertEqual(email.get('subject'), 'Two recipients')
         self.assertEqual(email.get('sent_at'), '2017-02-13 06:25')
-        self.assertEqual(email.get('to'), ['clemens@victoria.lokole.ca',
-                                           'laura@victoria.lokole.ca'])
+        self.assertEqual(email.get('to'), ['clemens@victoria.lokole.ca', 'laura@victoria.lokole.ca'])
 
     def test_prefers_html_body_over_text(self):
         mime_email = self._given_mime_email('email-html.mime')
 
-        email = email_parser.parse_mime_email(mime_email)
+        email = self._parse(mime_email)
 
-        self.assertEqual(email.get('body'),
-                         '<div dir="ltr">Body of the message.</div>\n')
+        self.assertEqual(email.get('body'), '<div dir="ltr">Body of the message.</div>\n')
 
     def test_parses_email_with_cc_and_bcc(self):
         mime_email = self._given_mime_email('email-ccbcc.mime')
 
-        email = email_parser.parse_mime_email(mime_email)
+        email = self._parse(mime_email)
 
         self.assertEqual(email.get('bcc'), ['laura@lokole.ca'])
-        self.assertEqual(email.get('cc'), ['nzola@lokole.ca',
-                                           'clemens@lokole.ca'])
+        self.assertEqual(email.get('cc'), ['clemens@lokole.ca', 'nzola@lokole.ca'])
 
     def test_parses_email_with_attachments(self):
         mime_email = self._given_mime_email('email-attachment.mime')
 
-        email = email_parser.parse_mime_email(mime_email)
+        email = self._parse(mime_email)
         attachments = email.get('attachments', [])
 
         self.assertEqual(len(attachments), 1)
         self.assertGreater(len(attachments[0].get('content')), 0)
-        self.assertEqual(attachments[0].get('filename'),
-                         'cute-mouse-clipart-mouse4.png')
+        self.assertEqual(attachments[0].get('filename'), 'cute-mouse-clipart-mouse4.png')
         self.assertNotIn('id', attachments[0])
 
     def test_cid(self):
         mime_email = self._given_mime_email('email-cid.mime')
 
-        email = email_parser.parse_mime_email(mime_email)
+        email = self._parse(mime_email)
         attachments = email.get('attachments', [])
 
         self.assertEqual(len(attachments), 2)
@@ -80,9 +76,17 @@ class ParseMimeEmailTests(TestCase):
         self.assertNotEqual(attachments[0]['cid'], attachments[1]['cid'])
 
     @classmethod
+    def _parse(cls, mime_email):
+        return email_parser.parse_mime_email(mime_email)
+
+    @classmethod
     def _given_mime_email(cls, filename, directory=TEST_DATA_DIRECTORY):
         with open(join(directory, filename)) as fobj:
             return fobj.read()
+
+
+class MimeEmailParserTests(ParseMimeEmailTests):
+    _parse = email_parser.MimeEmailParser()
 
 
 class GetDomainsTests(TestCase):
@@ -94,13 +98,20 @@ class GetDomainsTests(TestCase):
         self.assertSetEqual(set(domains), {'bar.com', 'com'})
 
     def test_gets_domains_with_cc_and_bcc(self):
-        email = {'to': ['foo@bar.com'],
-                 'cc': ['baz@bar.com'],
-                 'bcc': ['foo@com']}
+        email = {'to': ['foo@bar.com'], 'cc': ['baz@bar.com'], 'bcc': ['foo@com']}
 
         domains = email_parser.get_domains(email)
 
         self.assertSetEqual(set(domains), {'bar.com', 'com'})
+
+
+class GetReceipientsTests(TestCase):
+    def test_get_recipients(self):
+        email = {'to': ['foo@bar.com'], 'cc': ['baz@bar.com', 'foo@com']}
+
+        recipients = email_parser.get_recipients(email)
+
+        self.assertSetEqual(set(recipients), {'foo@bar.com', 'baz@bar.com', 'foo@com'})
 
 
 class ResizeImageTests(TestCase):
@@ -119,60 +130,77 @@ class ResizeImageTests(TestCase):
 
 
 class ConvertImgUrlToBase64Tests(TestCase):
-    @mock.activate
+    @mock_responses.activate
     def test_format_inline_images_with_img_tag(self):
         self.givenTestImage()
         input_email = {'body': '<div><h3>test image</h3><img src="http://test-url.png"/></div>'}
 
-        output_email = email_parser.format_inline_images(input_email)
+        output_email = email_parser.format_inline_images(input_email, self.fail_if_called)
 
         self.assertStartsWith(output_email['body'], '<div><h3>test image</h3><img src="data:image/png;')
+
+    @mock_responses.activate
+    @patch.object(email_parser, 'Image')
+    def test_handles_exceptions_when_processing_image(self, mock_pil):
+        mock_pil.open.side_effect = throw(IOError())
+        handled_errors = []
+
+        def on_error(*args):
+            handled_errors.append(args)
+
+        self.givenTestImage()
+        input_email = {'body': '<div><h3>test image</h3><img src="http://test-url.png"/></div>'}
+
+        output_email = email_parser.format_inline_images(input_email, on_error)
+
+        self.assertEqual(len(handled_errors), 1)
+        self.assertEqual(output_email, input_email)
 
     def test_format_inline_images_with_img_tag_without_src_attribute(self):
         input_email = {'body': '<div><img/></div>'}
 
-        output_email = email_parser.format_inline_images(input_email)
+        output_email = email_parser.format_inline_images(input_email, self.fail_if_called)
 
         self.assertEqual(output_email, input_email)
 
     def test_format_inline_images_with_img_tag_and_invalid_src_attribute(self):
         input_email = {'body': '<div><img src="foo:invalid"/></div>'}
 
-        output_email = email_parser.format_inline_images(input_email)
+        output_email = email_parser.format_inline_images(input_email, self.fail_if_called)
 
         self.assertEqual(output_email, input_email)
 
-    @mock.activate
+    @mock_responses.activate
     def test_format_inline_images_with_bad_request(self):
         self.givenTestImage(status=404)
         input_email = {'body': '<div><img src="http://test-url.png"/></div>'}
 
-        output_email = email_parser.format_inline_images(input_email)
+        output_email = email_parser.format_inline_images(input_email, self.fail_if_called)
 
         self.assertEqual(output_email, input_email)
 
-    @mock.activate
+    @mock_responses.activate
     def test_format_inline_images_with_many_img_tags(self):
         self.givenTestImage()
         input_email = {'body': '<div><img src="http://test-url.png"/><img src="http://test-url.png"/></div>'}
 
-        output_email = email_parser.format_inline_images(input_email)
+        output_email = email_parser.format_inline_images(input_email, self.fail_if_called)
 
         self.assertHasCount(output_email['body'], 'src="data:', 2)
 
     def test_format_inline_images_without_img_tags(self):
         input_email = {'body': '<div></div>'}
 
-        output_email = email_parser.format_inline_images(input_email)
+        output_email = email_parser.format_inline_images(input_email, self.fail_if_called)
 
         self.assertEqual(output_email, input_email)
 
-    @mock.activate
+    @mock_responses.activate
     def test_format_inline_images_without_content_type(self):
         self.givenTestImage(content_type='')
         input_email = {'body': '<div><img src="http://test-url.png"/></div>'}
 
-        output_email = email_parser.format_inline_images(input_email)
+        output_email = email_parser.format_inline_images(input_email, self.fail_if_called)
 
         self.assertStartsWith(output_email['body'], '<div><img src="data:image/png;')
 
@@ -181,18 +209,50 @@ class ConvertImgUrlToBase64Tests(TestCase):
 
     def assertHasCount(self, data, snippet, expected_count):
         actual_count = data.count(snippet)
-        self.assertEqual(actual_count, expected_count,
-                         'Expected {} to occur {} times but got {}'.format(snippet, expected_count, actual_count))
+        self.assertEqual(actual_count, expected_count, f'Expected {snippet} to occur {expected_count} '
+                         f'times but got {actual_count}')
 
     @classmethod
     def givenTestImage(cls, content_type='image/png', status=200):
         with open(join(TEST_DATA_DIRECTORY, 'test_image.png'), 'rb') as image:
             image_bytes = image.read()
 
-        mock.add(mock.GET, 'http://test-url.png',
-                 headers={'Content-Type': content_type},
-                 body=image_bytes,
-                 status=status)
+        mock_responses.add(
+            mock_responses.GET,
+            'http://test-url.png',
+            content_type=content_type,
+            body=image_bytes,
+            status=status,
+        )
+
+    def fail_if_called(self, message, *args):
+        self.fail(message % args)
+
+
+class EnsureHasSentAtTests(TestCase):
+    def test_sets_sent_at_if_missing(self):
+        input_email = {}
+
+        email_parser.ensure_has_sent_at(input_email)
+
+        self.assertIn('sent_at', input_email)
+        self.assertEqual(len(input_email['sent_at']), 16)
+
+    def test_sets_sent_at_if_empty(self):
+        input_email = {'sent_at': ''}
+
+        email_parser.ensure_has_sent_at(input_email)
+
+        self.assertIn('sent_at', input_email)
+        self.assertEqual(len(input_email['sent_at']), 16)
+
+    def test_respects_sent_at_if_existing(self):
+        sent_at = '2020-02-01 21:09'
+        input_email = {'sent_at': sent_at}
+
+        email_parser.ensure_has_sent_at(input_email)
+
+        self.assertEqual(input_email['sent_at'], sent_at)
 
 
 class FormatAttachedFilesTests(TestCase):
