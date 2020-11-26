@@ -70,6 +70,7 @@ jobs:
     env:
       ARM_ACCESS_KEY: ${{secrets.ARM_ACCESS_KEY}}
       AZURE_STORAGE_ACCOUNT: "tstate20838"
+      TF_ACTION_WORKING_DIR: "./docker/setup/terraform"
 
     steps:
       - uses: actions/checkout@v2
