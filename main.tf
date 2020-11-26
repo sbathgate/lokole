@@ -2,10 +2,10 @@
 # ref: https://docs.microsoft.com/en-us/azure/developer/terraform/store-state-in-azure-storage
 terraform {
   backend "azurerm" {
-    resource_group_name   = "tstate"
-    storage_account_name  = "tstate09762"
-    container_name        = "tstate"
-    key                   = "terraform.tfstate"
+    resource_group_name  = "tstate"
+    storage_account_name = "tstate32033"
+    container_name       = "tstate"
+    key                  = "terraform.tfstate"
   }
 }
 
@@ -36,7 +36,7 @@ resource "random_id" "randomId" {
     # Generate a new ID only when a new resource group is defined
     resource_group = azurerm_resource_group.vm.name
   }
-  
+
   byte_length = 3
 }
 
@@ -54,7 +54,7 @@ resource "azurerm_storage_account" "serverTablesName" {
   network_rules {
     default_action = "Allow"
     bypass         = ["AzureServices"]
-    ip_rules       = []     
+    ip_rules       = []
   }
 
   tags = {}
@@ -74,7 +74,7 @@ resource "azurerm_storage_account" "serverBlobsName" {
   network_rules {
     default_action = "Allow"
     bypass         = ["AzureServices"]
-    ip_rules       = []     
+    ip_rules       = []
   }
 
   tags = {}
@@ -94,7 +94,7 @@ resource "azurerm_storage_account" "clientBlobsName" {
   network_rules {
     default_action = "Allow"
     bypass         = ["AzureServices"]
-    ip_rules       = []     
+    ip_rules       = []
   }
 
   tags = {}
@@ -194,9 +194,9 @@ resource "azurerm_servicebus_namespace_authorization_rule" "data" {
 # }
 
 resource "azurerm_servicebus_queue" "serverQueueSendgridMime" {
-  name                = var.serverQueueSendgridMime
-  resource_group_name = azurerm_resource_group.data.name
-  namespace_name      = azurerm_servicebus_namespace.data.name
+  name                  = var.serverQueueSendgridMime
+  resource_group_name   = azurerm_resource_group.data.name
+  namespace_name        = azurerm_servicebus_namespace.data.name
   max_size_in_megabytes = 5120
 
   # Optional Values
@@ -213,9 +213,9 @@ resource "azurerm_servicebus_queue" "serverQueueSendgridMime" {
 }
 
 resource "azurerm_servicebus_queue" "serverQueueEmailSend" {
-  name                = var.serverQueueEmailSend
-  resource_group_name = azurerm_resource_group.data.name
-  namespace_name      = azurerm_servicebus_namespace.data.name
+  name                  = var.serverQueueEmailSend
+  resource_group_name   = azurerm_resource_group.data.name
+  namespace_name        = azurerm_servicebus_namespace.data.name
   max_size_in_megabytes = 5120
 
   # Optional Values
@@ -232,9 +232,9 @@ resource "azurerm_servicebus_queue" "serverQueueEmailSend" {
 }
 
 resource "azurerm_servicebus_queue" "serverQueueClientPackage" {
-  name                = var.serverQueueClientPackage
-  resource_group_name = azurerm_resource_group.data.name
-  namespace_name      = azurerm_servicebus_namespace.data.name
+  name                  = var.serverQueueClientPackage
+  resource_group_name   = azurerm_resource_group.data.name
+  namespace_name        = azurerm_servicebus_namespace.data.name
   max_size_in_megabytes = 5120
 
   # Optional Values
@@ -251,9 +251,9 @@ resource "azurerm_servicebus_queue" "serverQueueClientPackage" {
 }
 
 resource "azurerm_servicebus_queue" "mailboxreceived" {
-  name                = "mailboxreceived"
-  resource_group_name = azurerm_resource_group.data.name
-  namespace_name      = azurerm_servicebus_namespace.data.name
+  name                  = "mailboxreceived"
+  resource_group_name   = azurerm_resource_group.data.name
+  namespace_name        = azurerm_servicebus_namespace.data.name
   max_size_in_megabytes = 1024
 
   # Optional Values
@@ -270,9 +270,9 @@ resource "azurerm_servicebus_queue" "mailboxreceived" {
 }
 
 resource "azurerm_servicebus_queue" "mailboxsent" {
-  name                = "mailboxsent"
-  resource_group_name = azurerm_resource_group.data.name
-  namespace_name      = azurerm_servicebus_namespace.data.name
+  name                  = "mailboxsent"
+  resource_group_name   = azurerm_resource_group.data.name
+  namespace_name        = azurerm_servicebus_namespace.data.name
   max_size_in_megabytes = 1024
 
   # Optional Values
@@ -289,9 +289,9 @@ resource "azurerm_servicebus_queue" "mailboxsent" {
 }
 
 resource "azurerm_servicebus_queue" "register" {
-  name                = "register"
-  resource_group_name = azurerm_resource_group.data.name
-  namespace_name      = azurerm_servicebus_namespace.data.name
+  name                  = "register"
+  resource_group_name   = azurerm_resource_group.data.name
+  namespace_name        = azurerm_servicebus_namespace.data.name
   max_size_in_megabytes = 1024
 
   # Optional Values
@@ -308,9 +308,9 @@ resource "azurerm_servicebus_queue" "register" {
 }
 
 resource "azurerm_servicebus_queue" "service" {
-  name                = "service"
-  resource_group_name = azurerm_resource_group.data.name
-  namespace_name      = azurerm_servicebus_namespace.data.name
+  name                  = "service"
+  resource_group_name   = azurerm_resource_group.data.name
+  namespace_name        = azurerm_servicebus_namespace.data.name
   max_size_in_megabytes = 1024
 
   # Optional Values
@@ -354,10 +354,10 @@ resource "azurerm_resource_group" "vm" {
 # https://docs.microsoft.com/en-us/azure/developer/terraform/create-linux-virtual-machine-with-infrastructure
 # Create virtual network
 resource "azurerm_virtual_network" "vm" {
-  name                 = "vm-vnet"
-  location             = azurerm_resource_group.vm.location
-  resource_group_name  = azurerm_resource_group.vm.name
-  address_space        = ["10.0.0.0/16"]
+  name                = "vm-vnet"
+  location            = azurerm_resource_group.vm.location
+  resource_group_name = azurerm_resource_group.vm.name
+  address_space       = ["10.0.0.0/16"]
 
   tags = {}
 }
@@ -372,15 +372,15 @@ resource "azurerm_subnet" "vmsubnet" {
 
 # Create public IPs
 resource "azurerm_public_ip" "vm" {
-  name                         = "vm-ip"
-  location                     = azurerm_resource_group.vm.location
-  resource_group_name          = azurerm_resource_group.vm.name
-  
-  allocation_method            = "Dynamic"
-  sku                          = "Basic"
-  ip_version                   = "IPv4"
-  domain_name_label            = "opwenvmtest"
-  idle_timeout_in_minutes      = 4
+  name                = "vm-ip"
+  location            = azurerm_resource_group.vm.location
+  resource_group_name = azurerm_resource_group.vm.name
+
+  allocation_method       = "Dynamic"
+  sku                     = "Basic"
+  ip_version              = "IPv4"
+  domain_name_label       = "opwenvmtest"
+  idle_timeout_in_minutes = 4
 
   tags = {}
 }
@@ -434,9 +434,9 @@ resource "azurerm_network_security_group" "vm" {
 # Create network interface
 # https://www.terraform.io/docs/providers/azurerm/r/network_interface.html
 resource "azurerm_network_interface" "vm" {
-  name                      = "vm-nic"
-  location                  = azurerm_resource_group.vm.location
-  resource_group_name       = azurerm_resource_group.vm.name
+  name                = "vm-nic"
+  location            = azurerm_resource_group.vm.location
+  resource_group_name = azurerm_resource_group.vm.name
 
   ip_configuration {
     name                          = "vm-nicConfiguration"
@@ -468,11 +468,11 @@ resource "random_id" "randomVmId" {
 #! Verify whether this is necessary
 # Create storage account for boot diagnostics
 resource "azurerm_storage_account" "vm" {
-  name                        = "diag${random_id.randomVmId.hex}"
-  location                    = azurerm_resource_group.vm.location
-  resource_group_name         = azurerm_resource_group.vm.name
-  account_tier                = "Standard"
-  account_replication_type    = "LRS"
+  name                     = "diag${random_id.randomVmId.hex}"
+  location                 = azurerm_resource_group.vm.location
+  resource_group_name      = azurerm_resource_group.vm.name
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
 
   tags = {}
 }
@@ -480,7 +480,7 @@ resource "azurerm_storage_account" "vm" {
 # Create (and display) an SSH key
 resource "tls_private_key" "vm" {
   algorithm = "RSA"
-  rsa_bits = 4096
+  rsa_bits  = 4096
 }
 output "tls_private_key" { value = tls_private_key.vm.private_key_pem }
 
@@ -513,8 +513,8 @@ resource "azurerm_linux_virtual_machine" "vm" {
   allow_extension_operations      = true
 
   admin_ssh_key {
-    username       = var.RESOURCE_GROUP_NAME
-    public_key     = tls_private_key.vm.public_key_openssh
+    username   = var.RESOURCE_GROUP_NAME
+    public_key = tls_private_key.vm.public_key_openssh
   }
 
   boot_diagnostics {
@@ -529,10 +529,10 @@ resource "azurerm_linux_virtual_machine" "vm" {
 
 # Create a resource group if it doesn't exist
 resource "azurerm_resource_group" "test" {
-    name     = "${var.RESOURCE_GROUP_NAME}test"
-    location = var.location
+  name     = "${var.RESOURCE_GROUP_NAME}test"
+  location = var.location
 
-    tags = {}
+  tags = {}
 }
 
 # ------------------------------
