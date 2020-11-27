@@ -7,6 +7,7 @@ if [[ "$1" != "install" ]]; then
   cd - || exit 99
   docker-compose -f /home/opwen/lokole/docker/docker-compose.prod.yml pull || exit 2
   docker-compose -f /home/opwen/lokole/docker/docker-compose.prod.yml up -d || exit 3
+  docker system prune -a -f
   exit 0
 fi
 
@@ -25,7 +26,7 @@ contact_email="ascoderu.opwen@gmail.com"
 sudo apt-get update
 sudo apt-get upgrade -y
 sudo apt-get install -y git curl fail2ban
-sudo tee /etc/fail2ban/jail.conf << EOM
+sudo tee /etc/fail2ban/jail.conf <<EOM
 [DEFAULT]
 ignoreip = 127.0.0.1
 bantime = 300
@@ -67,7 +68,7 @@ docker-compose -f lokole/docker/docker-compose.prod.yml up -d
 #
 # set up nginx
 #
-cat > lokole/secrets/nginx.env << EOM
+cat >lokole/secrets/nginx.env <<EOM
 NGINX_WORKERS=auto
 HOSTNAME_WEBAPP=localhost:8080
 HOSTNAME_EMAIL_RECEIVE=localhost:8888

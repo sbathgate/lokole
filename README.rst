@@ -2,8 +2,8 @@
 Lokole
 ======
 
-.. image:: https://travis-ci.org/ascoderu/lokole.svg?branch=master
-  :target: https://travis-ci.org/ascoderu/lokole
+.. image:: https://github.com/ascoderu/lokole/workflows/CI/badge.svg
+  :target: https://github.com/ascoderu/lokole/actions
 
 .. image:: https://img.shields.io/pypi/v/opwen_email_client.svg
   :target: https://pypi.python.org/pypi/opwen_email_client/
@@ -40,8 +40,7 @@ The Lokole email application is intended to run on low-spec Raspberry Pi 3
 hardware (or similar). Read the "Production setup" section below for further
 information on how to set up the client devices.
 
-The Lokole email server is implemented using `Connexion <https://jobs.zalando.com/tech/blog/crafting-effective-microservices-in-python/>`_
-and has two main responsibilities:
+The Lokole email server has two main responsibilities:
 
 1. Receive emails from the internet that are addressed to Lokole users and
    forward them to the appropriate Lokole device.
@@ -87,11 +86,36 @@ that aims to address this problem by tackling it from three perspectives:
 System overview
 ---------------
 
-.. image:: https://user-images.githubusercontent.com/1086421/50498160-5eed3500-0a0c-11e9-888b-830140cd2986.png
+.. image:: https://static.swimlanes.io/23added12f9ab7faa03ac6d1c6bdc733.png
   :width: 800
   :align: center
-  :alt: Overview of the Lokole system
-  :target: https://user-images.githubusercontent.com/1086421/50498160-5eed3500-0a0c-11e9-888b-830140cd2986.png
+  :alt: Overview of the Lokole client registration flow
+  :target: https://swimlanes.io/u/SfWS0LVYu
+
+.. image:: https://static.swimlanes.io/b070c40083a3f67ede3e49fa9cd25933.png
+  :width: 800
+  :align: center
+  :alt: Overview of the Lokole client email upload flow
+  :target: https://swimlanes.io/u/hub7TEZgp
+
+.. image:: https://static.swimlanes.io/3dc4b74d377eb3094dc83fc1da9dfe84.png
+  :width: 800
+  :align: center
+  :alt: Overview of the Lokole client email download flow
+  :target: https://swimlanes.io/u/_QqT0iQx8
+
+Below is a list of some of the key technologies used in the Lokole project:
+
+- `Connexion <https://jobs.zalando.com/tech/blog/crafting-effective-microservices-in-python/>`_ is the web framework for the Lokole email server API.
+- `Flask <https://flask.palletsprojects.com/>`_ is the web framework for the Lokole email client application.
+- `Dnsmasq <http://www.thekelleys.org.uk/dnsmasq/doc.html>`_ and `hostapd <https://w1.fi/hostapd/>`_ are used to set up a WiFi access point on the Lokole device via which the Lokole email client application is accessed.
+- `WvDial <https://wiki.debian.org/Wvdial>`_ is used to access the internet on the Lokole device to synchronize emails with the Lokole email server.
+- `Celery <http://www.celeryproject.org/>`_ is used to run background workers of the Lokole email server in `Azure ServiceBus <https://azure.microsoft.com/en-us/services/service-bus/>`_ (production) or `RabbitMQ <https://www.rabbitmq.com/>`_ (development). Celery is also used to run background workers and scheduled tasks on the Lokole email client application in `SQLAlchemy <https://www.sqlalchemy.org/>`_.
+- `Libcloud <https://libcloud.apache.org/>`_ is used to store emails in `Azure Storage <https://azure.microsoft.com/en-us/services/storage/>`_ (production) or `Azurite <https://github.com/Azure/Azurite>`_ (development).
+- `Sendgrid Inbound Parse <https://sendgrid.com/docs/for-developers/parsing-email/setting-up-the-inbound-parse-webhook/>`_ is used to receive emails from email providers and forward them to the Lokole email server. `Sendgrid Web API v3 <https://github.com/sendgrid/sendgrid-python>`_ is used to deliver emails from the Lokole email server to email providers. The MX records for Sendgrid are automatically generated via `Cloudflare API v4 <https://api.cloudflare.com/>`_.
+- `Github API v4 <https://developer.github.com/v4/>`_ is used to authenticate interactive calls to the Lokole email server API such as registering new clients or managing existing clients. Authorization is managed by Github team memberships on the Ascoderu organization. Management operations are exposed via the Lokole status page which is implemented in `React <https://reactjs.org/>`_ with `Ant Design <https://ant.design/docs/react/introduce>`_.
+- `Github Actions <https://github.com/ascoderu/lokole/actions>`_ are used to verify pull requests and deploy updates to production.
+- [ ~ Dependencies scanned by PyUp.io ~ ]
 
 --------------------
 Data exchange format
@@ -140,7 +164,7 @@ running the unit tests and other CI steps such as linting:
 
   make build
 
-You can now run the application stack; code changes will be hot reloaded:
+You can now run the application stack:
 
 .. sourcecode :: sh
 
@@ -162,7 +186,12 @@ in the integration tests folder and can be run via:
   make build start
 
   # in another terminal, run the integration tests
-  make integration-tests
+  # the integration tests also serve the purpose of
+  # seeding the system with some test data
+  # you can access the email service at http://localhost:8080
+  # you can access the email client at http://localhost:5000
+  # you can access the status page at http://localhost:3000
+  make integration-tests test-emails
 
   # finally, tear down the services
   make stop
@@ -318,5 +347,3 @@ and a translation editor such as `poedit <https://poedit.net/>`_. Then follow th
 
   # finalize the translation file
   pybabel compile -d opwen_email_client/webapp/translations
-
-[ ~ Dependencies scanned by PyUp.io ~ ]

@@ -12,13 +12,13 @@ from libcloud.storage.types import ObjectDoesNotExistError
 from opwen_email_server.constants import events
 from opwen_email_server.constants import mailbox
 from opwen_email_server.constants import sync
-from opwen_email_server.services.auth import AzureAuth
-from opwen_email_server.services.auth import NoAuth
+from opwen_email_server.services.auth import Auth
 from opwen_email_server.services.sendgrid import SendSendgridEmail
 from opwen_email_server.services.storage import AzureObjectsStorage
 from opwen_email_server.services.storage import AzureObjectStorage
 from opwen_email_server.services.storage import AzureTextStorage
 from opwen_email_server.utils.email_parser import MimeEmailParser
+from opwen_email_server.utils.email_parser import descending_timestamp
 from opwen_email_server.utils.email_parser import ensure_has_sent_at
 from opwen_email_server.utils.email_parser import get_domain
 from opwen_email_server.utils.email_parser import get_domains
@@ -29,7 +29,6 @@ from opwen_email_server.utils.serialization import from_jsonl_bytes
 from opwen_email_server.utils.serialization import to_base64
 from opwen_email_server.utils.serialization import to_jsonl_bytes
 from opwen_email_server.utils.string import is_lowercase
-from opwen_email_server.utils.unique import new_client_id
 from opwen_email_server.utils.unique import new_email_id
 
 Response = Union[dict, Tuple[str, int]]
@@ -40,7 +39,7 @@ class _Action(ABC, LogMixin):
         try:
             return self._action(*args, **kwargs)
         except Exception as ex:
-            self.log_exception(ex, 'error in action %s', self.__class__.__name__)
+            self.log_exception(ex, '%s(args=%r, kwargs=%r)', self.__class__.__name__, args, kwargs)
             raise ex
 
     def _action(self, *args, **kwargs) -> Response:
@@ -124,8 +123,9 @@ class _IndexEmailForMailbox(_Action):
 
         for email_address in self._get_pivot(email):
             domain = get_domain(email_address)
+            desc_prefix = descending_timestamp(email['sent_at'])
             if domain.endswith(mailbox.MAILBOX_DOMAIN):
-                index = f"{domain}/{email_address}/{self._folder}/{email['sent_at']}/{resource_id}"
+                index = f"{domain}/{email_address}/{self._folder}/{desc_prefix}/{resource_id}"
                 self._mailbox_storage.store_text(index, 'indexed')
 
         self.log_event(events.MAILBOX_EMAIL_INDEXED, {'folder': self._folder})  # noqa: E501  # yapf: disable
@@ -215,14 +215,15 @@ class StoreWrittenClientEmails(_Action):
 
 
 class ReceiveInboundEmail(_Action):
-    def __init__(self, auth: Union[AzureAuth, NoAuth], raw_email_storage: AzureTextStorage, next_task: Callable[[str],
-                                                                                                                None]):
-
+    def __init__(self, auth: Auth, raw_email_storage: AzureTextStorage, next_task: Callable[[str], None]):
         self._auth = auth
         self._raw_email_storage = raw_email_storage
         self._next_task = next_task
 
-    def _action(self, client_id, email, **sendgrid_args):  # type: ignore
+    def _action(self, client_id=None, email=None, **sendgrid_args):  # type: ignore
+        if email is None:
+            return 'email cannot be None', 400
+
         domain = self._auth.domain_for(client_id)
         if not domain:
             self.log_event(events.UNREGISTERED_CLIENT, {'client_id': client_id})  # noqa: E501  # yapf: disable
@@ -277,7 +278,7 @@ class ProcessServiceEmail(_Action):
             formatted_email_id = new_email_id(formatted_email)
             formatted_email['_uid'] = formatted_email_id
 
-            self._email_storage.store_email(formatted_email, formatted_email_id)
+            self._email_storage.store_object(formatted_email_id, formatted_email)
 
             self._next_task(formatted_email_id)
 
@@ -287,7 +288,7 @@ class ProcessServiceEmail(_Action):
 
 
 class DownloadClientEmails(_Action):
-    def __init__(self, auth: AzureAuth, client_storage: AzureObjectsStorage, email_storage: AzureObjectStorage,
+    def __init__(self, auth: Auth, client_storage: AzureObjectsStorage, email_storage: AzureObjectStorage,
                  pending_storage: AzureTextStorage):
 
         self._auth = auth
@@ -345,8 +346,7 @@ class DownloadClientEmails(_Action):
 
 
 class UploadClientEmails(_Action):
-    def __init__(self, auth: AzureAuth, next_task: Callable[[str], None]):
-
+    def __init__(self, auth: Auth, next_task: Callable[[str], None]):
         self._auth = auth
         self._next_task = next_task
 
@@ -365,18 +365,13 @@ class UploadClientEmails(_Action):
 
 
 class RegisterClient(_Action):
-    def __init__(self,
-                 auth: AzureAuth,
-                 client_storage: AzureObjectsStorage,
-                 setup_mailbox: Callable[[str, str], None],
-                 setup_mx_records: Callable[[str], None],
-                 client_id_source: Callable[[], str] = None):
-
+    def __init__(self, auth: Auth, client_storage: AzureObjectsStorage, setup_mailbox: Callable[[str, str], None],
+                 setup_mx_records: Callable[[str], None], client_id_source: Callable[[], str]):
         self._auth = auth
         self._client_storage = client_storage
         self._setup_mailbox = setup_mailbox
         self._setup_mx_records = setup_mx_records
-        self._client_id_source = client_id_source or new_client_id
+        self._client_id_source = client_id_source
 
     def _action(self, domain, owner):  # type: ignore
         client_id = self._client_id_source()
@@ -391,25 +386,25 @@ class RegisterClient(_Action):
 
 
 class CreateClient(_Action):
-    def __init__(self, auth: AzureAuth, task: Callable[[str, str], None]):
+    def __init__(self, auth: Auth, task: Callable[[str, str], None]):
         self._auth = auth
         self._task = task
 
-    def _action(self, client, **auth_args):  # type: ignore
+    def _action(self, client, user, **auth_args):  # type: ignore
         domain = client['domain']
         if not is_lowercase(domain):
             return 'domain must be lowercase', 400
         if self._auth.client_id_for(domain) is not None:
             return 'client already exists', 409
 
-        self._task(domain, auth_args.get('user'))
+        self._task(domain, user)
 
         self.log_event(events.CLIENT_CREATED, {'domain': domain})  # noqa: E501  # yapf: disable
         return 'accepted', 201
 
 
 class ListClients(_Action):
-    def __init__(self, auth: AzureAuth):
+    def __init__(self, auth: Auth):
         self._auth = auth
 
     def _action(self, **auth_args):  # type: ignore
@@ -422,11 +417,11 @@ class ListClients(_Action):
 
 
 class GetClient(_Action):
-    def __init__(self, auth: AzureAuth, client_storage: AzureObjectsStorage):
+    def __init__(self, auth: Auth, client_storage: AzureObjectsStorage):
         self._auth = auth
         self._client_storage = client_storage
 
-    def _action(self, domain, **auth_args):  # type: ignore
+    def _action(self, domain, user, **auth_args):  # type: ignore
         if not is_lowercase(domain):
             return 'domain must be lowercase', 400
 
@@ -434,7 +429,7 @@ class GetClient(_Action):
         if client_id is None:
             return 'client does not exist', 404
 
-        if not self._auth.is_owner(domain, auth_args.get('user')):
+        if not self._auth.is_owner(domain, user):
             return 'client does not belong to the user', 403
 
         access_info = self._client_storage.access_info()
@@ -449,10 +444,9 @@ class GetClient(_Action):
 
 
 class DeleteClient(_Action):
-    def __init__(self, auth: AzureAuth, delete_mailbox: Callable[[str, str], None],
-                 delete_mx_records: Callable[[str], None], mailbox_storage: AzureTextStorage,
-                 pending_storage: AzureTextStorage, user_storage: AzureObjectStorage):
-
+    def __init__(self, auth: Auth, delete_mailbox: Callable[[str, str], None], delete_mx_records: Callable[[str], None],
+                 mailbox_storage: AzureTextStorage, pending_storage: AzureTextStorage,
+                 user_storage: AzureObjectStorage):
         self._auth = auth
         self._delete_mailbox = delete_mailbox
         self._delete_mx_records = delete_mx_records
@@ -460,7 +454,7 @@ class DeleteClient(_Action):
         self._pending_storage = pending_storage
         self._user_storage = user_storage
 
-    def _action(self, domain, **auth_args):  # type: ignore
+    def _action(self, domain, user, **auth_args):  # type: ignore
         if not is_lowercase(domain):
             return 'domain must be lowercase', 400
 
@@ -468,7 +462,7 @@ class DeleteClient(_Action):
         if client_id is None:
             return 'client does not exist', 404
 
-        if not self._auth.is_owner(domain, auth_args.get('user')):
+        if not self._auth.is_owner(domain, user):
             return 'client does not belong to the user', 403
 
         self._delete_mailbox(client_id, domain)
@@ -488,12 +482,12 @@ class DeleteClient(_Action):
 
 
 class CalculateNumberOfUsersMetric(_Action):
-    def __init__(self, auth: AzureAuth, user_storage: AzureObjectStorage):
+    def __init__(self, auth: Auth, user_storage: AzureObjectStorage):
         self._auth = auth
         self._user_storage = user_storage
 
-    def _action(self, domain, **auth_args):  # type: ignore
-        if not self._auth.is_owner(domain, auth_args.get('user')):
+    def _action(self, domain, user, **auth_args):  # type: ignore
+        if not self._auth.is_owner(domain, user):
             return 'client does not belong to the user', 403
 
         users = sum(1 for _ in self._user_storage.iter(f'{domain}/'))
@@ -504,12 +498,12 @@ class CalculateNumberOfUsersMetric(_Action):
 
 
 class CalculatePendingEmailsMetric(_Action):
-    def __init__(self, auth: AzureAuth, pending_storage: AzureTextStorage):
+    def __init__(self, auth: Auth, pending_storage: AzureTextStorage):
         self._auth = auth
         self._pending_storage = pending_storage
 
-    def _action(self, domain, **auth_args):  # type: ignore
-        if not self._auth.is_owner(domain, auth_args.get('user')):
+    def _action(self, domain, user, **auth_args):  # type: ignore
+        if not self._auth.is_owner(domain, user):
             return 'client does not belong to the user', 403
 
         pending_emails = sum(1 for _ in self._pending_storage.iter(f'{domain}/'))

@@ -24,9 +24,11 @@ from opwen_email_server.integration.celery import send_and_index_email
 from opwen_email_server.services.storage import AzureObjectStorage
 from opwen_email_server.services.storage import AzureTextStorage
 from opwen_email_server.utils.collections import chunks
+from opwen_email_server.utils.email_parser import descending_timestamp
 from opwen_email_server.utils.email_parser import ensure_has_sent_at
 from opwen_email_server.utils.email_parser import get_domain
 from opwen_email_server.utils.email_parser import get_recipients
+from opwen_email_server.utils.log import LogMixin
 
 
 class AzureRole:
@@ -124,7 +126,7 @@ class AzureUserStore(UserStore, UserReadStore, UserWriteStore):
         return f'{get_domain(email)}/{email}'
 
 
-class AzureEmailStore(EmailStore):
+class AzureEmailStore(EmailStore, LogMixin):
     def __init__(self, email_storage: AzureObjectStorage, mailbox_storage: AzureTextStorage,
                  pending_storage: AzureTextStorage, send_email: Callable[[str], None]):
         super().__init__(restricted=None)
@@ -153,6 +155,7 @@ class AzureEmailStore(EmailStore):
         try:
             email = self._email_storage.fetch_object(uid)
         except ObjectDoesNotExistError:
+            self.log_warning('Email at %s does not exist', uid)
             return None
         else:
             email['read'] = True
@@ -224,8 +227,9 @@ class AzureEmailStore(EmailStore):
             else:
                 continue
 
-            self._mailbox_storage.delete(f"{domain}/{email_address}/{folder}/{email['sent_at']}/{uid}")
-            self._email_storage.delete(uid)
+            desc_prefix = descending_timestamp(email['sent_at'])
+
+            self._mailbox_storage.delete(f"{domain}/{email_address}/{folder}/{desc_prefix}/{uid}")
 
     def _mark_sent(self, uids: Iterable[str]):
         pass

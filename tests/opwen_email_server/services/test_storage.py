@@ -26,6 +26,7 @@ from opwen_email_server.utils.serialization import from_jsonl_bytes
 from opwen_email_server.utils.serialization import to_jsonl_bytes
 from opwen_email_server.utils.temporary import create_tempfilename
 from opwen_email_server.utils.temporary import removing
+from opwen_email_server.utils.unique import NewGuid
 from tests.opwen_email_server.helpers import throw
 
 
@@ -75,14 +76,16 @@ class AzureTextStorageTests(TestCase):
             def get_container(*args, **kwargs):
                 if not container['get_was_called']:
                     container['get_was_called'] = True
+                    # noinspection PyTypeChecker
                     raise ContainerDoesNotExistError(None, driver, self._container)
 
                 return container
 
-            driver.get_container.side_effect = get_container
+            # noinspection PyTypeChecker
             driver.create_container.side_effect = throw(ContainerAlreadyExistsError(None, driver, self._container))
+            driver.get_container.side_effect = get_container
 
-            self.assertIs(self._storage._client, container)
+            self.assertIs(self._storage._client._wrapped, container)
 
     def setUp(self):
         self._folder = mkdtemp()
@@ -92,6 +95,42 @@ class AzureTextStorageTests(TestCase):
             key='key',
             container=self._container,
             provider='LOCAL',
+        )
+
+    def tearDown(self):
+        rmtree(self._folder)
+
+
+class AzureTextStorageCaseInsensitiveTests(TestCase):
+    def test_stores_fetches_and_deletes_text(self):
+        self._storage.store_text('iD1', 'some content')
+        actual_content = self._storage.fetch_text('Id1')
+
+        self.assertEqual(actual_content, 'some content')
+
+        self._storage.delete('id1')
+        with self.assertRaises(ObjectDoesNotExistError):
+            self._storage.fetch_text('id1')
+
+    def test_list_with_prefix(self):
+        self._storage.store_text('One/a', 'a')
+        self._storage.store_text('one/b.txt.gz', 'b')
+        self._storage.store_text('tWo/c.txt.gz', 'c')
+        self._storage.store_text('twO/d', 'd')
+        self._storage.store_text('two/e', 'e')
+        self._storage.store_text('f', 'f')
+        self.assertEqual(sorted(self._storage.iter('one/')), sorted(['a', 'b']))
+        self.assertEqual(sorted(self._storage.iter('two/')), sorted(['c', 'd', 'e']))
+
+    def setUp(self):
+        self._folder = mkdtemp()
+        self._container = 'container'
+        self._storage = AzureTextStorage(
+            account=self._folder,
+            key='key',
+            container=self._container,
+            provider='LOCAL',
+            case_sensitive=False,
         )
 
     def tearDown(self):
@@ -246,12 +285,15 @@ class AzureObjectsStorageTests(TestCase):
         self._folder = mkdtemp()
         self._container = 'container'
         mkdir(join(self._folder, self._container))
-        self._storage = AzureObjectsStorage(file_storage=AzureFileStorage(
-            account=self._folder,
-            key='unused',
-            container=self._container,
-            provider='LOCAL',
-        ))
+        self._storage = AzureObjectsStorage(
+            file_storage=AzureFileStorage(
+                account=self._folder,
+                key='unused',
+                container=self._container,
+                provider='LOCAL',
+            ),
+            resource_id_source=NewGuid(0),
+        )
 
     def tearDown(self):
         rmtree(self._folder)

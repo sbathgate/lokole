@@ -1,104 +1,55 @@
-PY_ENV ?= ./venv
+SHELL := bash -o pipefail
 
-.PHONY: tests
 default: build
 
-tests:
-	LOKOLE_LOG_LEVEL=CRITICAL $(PY_ENV)/bin/coverage run -m nose2 -v && \
-  $(PY_ENV)/bin/coverage xml && \
-  $(PY_ENV)/bin/coverage report
+.github.env: .github.env.gpg
+	@gpg --decrypt --batch --passphrase "$(GPG_PASSPHRASE)" .github.env.gpg >.github.env
 
-lint-swagger:
-	find opwen_email_server/swagger -type f -name '*.yaml' | while read file; do \
-    echo "==================== $$file ===================="; \
-    $(PY_ENV)/bin/swagger-flex --source="$$file" \
-  || exit 1; done
-
-lint-python:
-	$(PY_ENV)/bin/flake8 opwen_email_server opwen_email_client
-	$(PY_ENV)/bin/isort --check-only --recursive opwen_email_server opwen_email_client --virtual-env $(PY_ENV)
-	$(PY_ENV)/bin/yapf --recursive --parallel --diff opwen_email_server opwen_email_client tests
-	$(PY_ENV)/bin/bandit --recursive opwen_email_server opwen_email_client
-	$(PY_ENV)/bin/mypy opwen_email_server opwen_email_client
-
-lint-yaml:
-	find . -type f -regex '.*\.ya?ml' -not -path '$(PY_ENV)/*' | grep -v '^./helm/' | while read file; do \
-    echo "==================== $$file ===================="; \
-    $(PY_ENV)/bin/yamllint "$$file" \
-  || exit 1; done
-
-lint-docker:
-	if command -v hadolint >/dev/null; then \
-    find . -type f -name Dockerfile -not -path '$(PY_ENV)/*' | while read file; do \
-      echo "==================== $$file ===================="; \
-      hadolint "$$file" \
-    || exit 1; done \
-  fi
-
-lint-shell:
-	if command -v shellcheck >/dev/null; then \
-    find . -type f -name '*.sh' -not -path '$(PY_ENV)/*' | while read file; do \
-      echo "==================== $$file ===================="; \
-      shellcheck "$$file" \
-    || exit 1; done \
-  fi
-
-lint-helm:
-	helm lint --strict ./helm/opwen_cloudserver
-	helm template ./helm/opwen_cloudserver > helm.yaml && kubeval --ignore-missing-schemas helm.yaml && rm helm.yaml
-
-lint: lint-python lint-shell lint-swagger lint-docker lint-yaml lint-helm
-
-ci: tests lint
+github-env: .github.env
+	@echo "::set-env name=SUFFIX::$(shell cat /proc/sys/kernel/random/uuid)"
+	@sed 's/=/::/' <.github.env | sed 's/^export /::set-env name=/'
 
 integration-tests:
 	docker-compose -f docker-compose.yml -f docker/docker-compose.test.yml build integtest && \
   docker-compose -f docker-compose.yml -f docker/docker-compose.test.yml run --rm integtest
 
-clean:
-	find . -name '__pycache__' -type d -print0 | xargs -0 rm -rf
+test-emails:
+	docker-compose -f docker-compose.yml -f docker/docker-compose.test.yml build integtest && \
+  docker-compose -f docker-compose.yml -f docker/docker-compose.test.yml run --rm integtest \
+  ./3-receive-email-for-client.sh bdd640fb-0667-1ad1-1c80-317fa3b1799d
 
 clean-storage:
-	docker-compose exec api sh -c \
-    '"$${PY_ENV}/bin/python" -m opwen_email_server.integration.cli delete-containers --suffix "$(SUFFIX)"'
-	docker-compose exec api sh -c \
-    '"$${PY_ENV}/bin/python" -m opwen_email_server.integration.cli delete-queues --suffix "$(SUFFIX)"'
+	docker-compose exec -T api python -m opwen_email_server.integration.cli delete-containers --suffix "$(SUFFIX)"
+	docker-compose exec -T api python -m opwen_email_server.integration.cli delete-queues --suffix "$(SUFFIX)"
+
+ci:
+	BUILD_TARGET=builder docker-compose build && \
+  docker-compose run --rm --no-deps api ./docker/app/run-ci.sh ----coverage-xml---- | tee coverage.xml && \
+  sed -i '1,/----coverage-xml----/d' coverage.xml && \
+  docker-compose -f docker-compose.yml -f docker/docker-compose.test.yml build ci
 
 build:
-	BUILD_TARGET=builder docker-compose build api && \
-  docker-compose run --no-deps --rm api cat coverage.xml > coverage.xml
-	docker-compose \
-    -f docker-compose.yml \
-    -f docker/docker-compose.dev.yml \
-    -f docker/docker-compose.test.yml \
-    -f docker/docker-compose.tools.yml \
-    build
+	docker-compose build
 
 start:
-	if [ "$(CI)" = "true" ]; then \
-    docker-compose up -d; \
-  else \
-    docker-compose -f docker-compose.yml -f docker/docker-compose.dev.yml up -d --remove-orphans; \
-  fi
+	docker-compose up -d --remove-orphans
 
 start-devtools:
 	docker-compose -f docker-compose.yml -f docker/docker-compose.tools.yml up -d --remove-orphans
 
+status:
+	docker-compose ps; \
+  docker-compose ps --services | while read service; do \
+    echo "==================== $$service ===================="; \
+    docker-compose logs "$$service"; \
+  done
+
 logs:
-	if [ "$(CI)" = "true" ]; then \
-    docker-compose ps; \
-    docker-compose ps --services | while read service; do \
-      echo "==================== $$service ===================="; \
-      docker-compose logs "$$service"; \
-    done \
-  else \
-    docker-compose logs --follow --tail=100; \
-  fi
+	docker-compose logs --follow --tail=100
 
 stop:
 	docker-compose \
     -f docker-compose.yml \
-    -f docker/docker-compose.dev.yml \
     -f docker/docker-compose.test.yml \
     -f docker/docker-compose.tools.yml \
     down --volumes --timeout=5
@@ -123,14 +74,18 @@ release-pypi:
 
 release-docker:
 	for tag in "latest" "$(DOCKER_TAG)"; do ( \
-    eval "$(shell find docker -type f -name 'Dockerfile' | while read dockerfile; do grep 'ARG ' "$$dockerfile" | sed 's/^ARG /export /g'; done)"; \
     export BUILD_TARGET="runtime"; \
     export BUILD_TAG="$$tag"; \
     export DOCKER_REPO="$(DOCKER_USERNAME)"; \
     docker-compose build; \
   ) done
 
-release-gh-pages:
+gh-pages-remote:
+	@git remote add ghp "https://$(GITHUB_AUTH_TOKEN)@github.com/ascoderu/lokole.git" && \
+  git config --local user.name "Deployment Bot (from Github Actions)" && \
+  git config --local user.email "deploy@ascoderu.ca"
+
+release-gh-pages: gh-pages-remote
 	docker container create --name statuspage "$(DOCKER_USERNAME)/opwenstatuspage:$(DOCKER_TAG)" && \
   docker cp "statuspage:/app/lokole" ./build && \
   docker container rm statuspage
@@ -168,22 +123,31 @@ deploy-k8s: kubeconfig
 renew-cert:
 	echo "Skipping: handled by cron on the VM"
 
+deploy-gh-pages:
+	@docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml build setup && \
+  docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml run --rm \
+    -v "$(PWD)/build:/app/build" \
+    -v "$(PWD)/.git:/app/.git" \
+    setup \
+    ghp-import --push --force --remote ghp --branch gh-pages --message "Update" /app/build
+
 deploy-pypi:
-	docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml build setup && \
+	@docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml build setup && \
   docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml run --rm \
     -v "$(PWD)/dist:/dist" \
     setup \
     twine upload --skip-existing -u "$(PYPI_USERNAME)" -p "$(PYPI_PASSWORD)" /dist/*
 
 deploy-docker:
-	for tag in "latest" "$(DOCKER_TAG)"; do ( \
+	@echo "$(DOCKER_PASSWORD)" | docker login --username "$(DOCKER_USERNAME)" --password-stdin && \
+  for tag in "latest" "$(DOCKER_TAG)"; do ( \
     export BUILD_TAG="$$tag"; \
     export DOCKER_REPO="$(DOCKER_USERNAME)"; \
     docker-compose push; \
   ) done
 
-deploy: deploy-pypi deploy-docker
-	docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml build setup && \
+deploy: deploy-pypi deploy-gh-pages deploy-docker
+	@docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml build setup && \
   docker-compose -f docker-compose.yml -f docker/docker-compose.setup.yml run --rm \
     -e LOKOLE_VM_PASSWORD="$(LOKOLE_VM_PASSWORD)" \
     -e LOKOLE_DNS_NAME="$(LOKOLE_DNS_NAME)" \

@@ -5,7 +5,7 @@ declare -a api_spec_paths
 case "${CONNEXION_SPEC}" in
   file:*)
     specs="${CONNEXION_SPEC:5}"
-    IFS="," read -r -a api_spec_paths <<< "${specs}"
+    IFS="," read -r -a api_spec_paths <<<"${specs}"
     ;;
   dir:*)
     specs="${CONNEXION_SPEC:4}"
@@ -29,7 +29,7 @@ if [[ "${LOKOLE_STORAGE_PROVIDER}" = "LOCAL" ]]; then
   mkdir -p "${LOKOLE_CLIENT_AZURE_STORAGE_NAME}"
 fi
 
-"${PY_ENV}/bin/gunicorn" \
+exec gunicorn \
   --workers="${SERVER_WORKERS}" \
   --log-level="${LOKOLE_LOG_LEVEL}" \
   --bind="0.0.0.0:${PORT}" \

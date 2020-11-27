@@ -21,6 +21,7 @@ from requests import get as http_get
 
 from opwen_email_server.config import MAX_HEIGHT_IMAGES
 from opwen_email_server.config import MAX_WIDTH_IMAGES
+from opwen_email_server.constants import mailbox
 from opwen_email_server.utils.log import LogMixin
 from opwen_email_server.utils.serialization import to_base64
 
@@ -145,7 +146,7 @@ def ensure_has_sent_at(email: dict):
 def _get_image_type(response: Response, url: str) -> Optional[str]:
     content_type = response.headers.get('Content-Type')
     if not content_type:
-        content_type = guess_type(url)[0]
+        content_type = guess_type(url.split('?')[0])[0]
     return content_type
 
 
@@ -223,6 +224,10 @@ def format_inline_images(email: dict, on_error: Callable) -> dict:
     new_email = dict(email)
     new_email['body'] = str(soup)
     return new_email
+
+
+def descending_timestamp(email_sent_at: str) -> str:
+    return str(mailbox.FUTURE_TIMESTAMP - int(datetime.fromisoformat(email_sent_at).timestamp()))
 
 
 class MimeEmailParser(LogMixin):
